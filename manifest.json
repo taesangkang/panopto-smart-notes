@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Panopto Smart Notes",
+  "version": "1.0.0",
+  "description": "AI-powered note-taking from Panopto lecture captions",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*/*", "http://*/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Panopto Smart Notes"
+  }
+}

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panopto Smart Notes</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Panopto Smart Notes</h1>
+    </header>
+
+    <!-- Status Section -->
+    <section class="status-section">
+      <div class="status-item">
+        <span class="status-label">Captions:</span>
+        <span id="captions-status" class="status-value">Checking...</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">Status:</span>
+        <span id="capture-status" class="status-value">Paused</span>
+      </div>
+    </section>
+
+    <!-- Controls -->
+    <section class="controls-section">
+      <button id="start-btn" class="btn btn-primary">Start</button>
+      <button id="pause-btn" class="btn btn-secondary" disabled>Pause</button>
+      <button id="clear-btn" class="btn btn-danger">Clear</button>
+      <button id="export-btn" class="btn btn-success">Export Markdown</button>
+    </section>
+
+    <!-- AI Settings -->
+    <section class="settings-section">
+      <h2>AI Settings</h2>
+      <div class="settings-row">
+        <label for="ai-enabled-toggle">AI Notes ON/OFF</label>
+        <input id="ai-enabled-toggle" type="checkbox">
+      </div>
+      <div class="settings-row">
+        <label for="provider-select">Provider</label>
+        <select id="provider-select">
+          <option value="gemini">Gemini</option>
+          <option value="openai">ChatGPT (OpenAI)</option>
+          <option value="anthropic">Claude (Anthropic)</option>
+        </select>
+      </div>
+      <div class="settings-row key-row">
+        <label for="gemini-api-key">Gemini API Key</label>
+        <input id="gemini-api-key" type="password" placeholder="Paste Gemini API key">
+      </div>
+      <div class="settings-row key-row">
+        <label for="openai-api-key">OpenAI API Key</label>
+        <input id="openai-api-key" type="password" placeholder="Paste OpenAI API key">
+      </div>
+      <div class="settings-row key-row">
+        <label for="anthropic-api-key">Anthropic API Key</label>
+        <input id="anthropic-api-key" type="password" placeholder="Paste Anthropic API key">
+      </div>
+      <div class="settings-row">
+        <button id="save-settings-btn" class="btn btn-primary">Save</button>
+        <button id="test-provider-btn" class="btn btn-secondary">Test Provider</button>
+      </div>
+      <p id="settings-status" class="settings-status"></p>
+    </section>
+
+    <!-- Live Transcript -->
+    <section class="transcript-section">
+      <h2>Live Transcript</h2>
+      <div id="transcript-container" class="transcript-container">
+        <p class="empty-state">No transcript yet. Click Start to begin capturing.</p>
+      </div>
+    </section>
+
+    <!-- Smart Notes -->
+    <section class="notes-section">
+      <h2>Smart Notes</h2>
+      <div id="notes-container" class="notes-container">
+        <p class="empty-state">Notes will appear here as captions are processed.</p>
+      </div>
+    </section>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
