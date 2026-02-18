@@ -1,223 +1,163 @@
 # Panopto Smart Notes
 
-A Chrome Extension (Manifest V3) that automatically captures captions from Panopto lecture videos and generates AI-powered smart notes in real-time.
+A Chrome Extension (Manifest V3) that captures live Panopto captions from the page DOM and turns them into structured, cumulative AI notes.
 
 ## Features
 
-- **Real-time Caption Capture**: Automatically detects and reads captions from HTML5 video elements
-- **Smart Chunking**: Groups captions into ~2-minute chunks for efficient processing
-- **AI-Powered Notes**: Generates structured notes including:
-  - Outline with headings and bullets
-  - Key terms with definitions
-  - Exam hints
-  - Open questions
-- **Live Transcript**: View captions as they're captured
-- **Export to Markdown**: Download your notes as a formatted Markdown file
+- Real-time caption capture from Panopto caption UI (DOM observers)
+- Live transcript feed with clickable timestamps
+- Smart chunking for note updates (time/size/pause-based finalize)
+- Multi-provider AI support (BYOK):
+  - Gemini
+  - OpenAI (ChatGPT API)
+  - Anthropic (Claude API)
+- AI settings panel:
+  - Provider selection
+  - Per-provider API keys
+  - AI Notes ON/OFF
+  - Provider connection test
+- Structured notes + Markdown export
+- Local persistence:
+  - Notes state in `chrome.storage.session`
+  - AI settings in `chrome.storage.local`
 
-## Installation
+## How It Works
 
-### Load as Unpacked Extension
+### Caption capture
 
-1. **Download/Clone** this repository to your local machine
+The content script waits for and monitors caption elements in the page using `MutationObserver`, with these selectors:
 
-2. **Open Chrome Extensions Page**:
-   - Navigate to `chrome://extensions/`
-   - Or go to Menu → More Tools → Extensions
+1. `#dockedCaptionText`
+2. `[id*=Caption][id*=Text]`
+3. Elements with `role` or `aria-label` containing `caption`
 
-3. **Enable Developer Mode**:
-   - Toggle the "Developer mode" switch in the top-right corner
+Each caption update is timestamped using:
 
-4. **Load Extension**:
-   - Click "Load unpacked"
-   - Select the folder containing this extension (the folder with `manifest.json`)
+- `video#primaryVideo.currentTime`, or
+- first available `<video>` element fallback
 
-5. **Verify Installation**:
-   - You should see "Panopto Smart Notes" in your extensions list
-   - The extension icon should appear in your Chrome toolbar
+### Dedupe behavior
 
-## Usage
+- Ignore empty text
+- Ignore exact duplicates
+- If new text starts with previous text (line growth), replace the previous entry
+- Otherwise append a new transcript entry
 
-1. **Navigate to a Panopto Lecture Page**:
-   - Open any page with a Panopto video player
-   - The extension automatically detects video elements
+### Chunk finalize rules
 
-2. **Open the Side Panel**:
-   - Click the extension icon in your Chrome toolbar
-   - Or right-click the extension icon → "Open side panel"
+A chunk is finalized when any of:
 
-3. **Start Capturing**:
-   - Click the "Start" button in the side panel
-   - The extension will begin capturing captions in real-time
-
-4. **View Live Transcript**:
-   - Watch captions appear in the "Live Transcript" section
-   - Click any transcript entry to seek the video to that timestamp
-
-5. **View Smart Notes**:
-   - Notes are automatically generated as chunks are processed
-   - View outline, key terms, exam hints, and questions
-
-6. **Export Notes**:
-   - Click "Export Markdown" to download your notes as a `.md` file
-
-## Controls
-
-- **Start**: Begin capturing captions from the video
-- **Pause**: Pause caption capture (current chunk will be finalized)
-- **Clear**: Clear all transcript and notes data
-- **Export Markdown**: Download notes as a Markdown file
-
-## Architecture
-
-### Components
-
-1. **Content Script** (`content-script.js`):
-   - Finds video elements on the page
-   - Reads caption cues using `video.textTracks` and `VTTCue`
-   - Groups captions into chunks (~2 minutes or 1500 characters)
-   - Manages capture state
-
-2. **Service Worker** (`service-worker.js`):
-   - Handles LLM API calls (currently uses mock function)
-   - Manages notes state in `chrome.storage.session`
-   - Routes messages between content script and side panel
-
-3. **Side Panel** (`sidepanel.html/js/css`):
-   - Displays live transcript and smart notes
-   - Provides control buttons
-   - Handles export functionality
-
-### Data Flow
-
-```
-Video Captions → Content Script → Transcript Buffer → Chunks
-                                                          ↓
-Side Panel ← Service Worker ← LLM Update ← Chunk + Notes State
-```
-
-### Chunking Rules
-
-A transcript chunk is finalized when ANY of:
 - 120 seconds elapsed
-- >1500 characters accumulated
+- Text length exceeds ~1500 chars
 - Video paused/ended
 
-### Notes Schema
+On finalize, the service worker runs a 2-stage AI pipeline:
+
+1. Caption cleaner
+2. Notes merger (cumulative JSON update)
+
+Then notes are merged with additional local quality checks:
+
+- heading stability
+- section matching
+- semantic bullet dedupe
+- filtering of banned/low-value note content
+
+## Notes JSON Schema (v1)
 
 ```json
 {
-  "title": string | null,
-  "outline": [
+  "title": "string | null",
+  "sections": [
     {
-      "ts": number | null,
-      "heading": string,
-      "bullets": string[]
+      "heading": "string",
+      "bullets": ["string"]
     }
   ],
-  "keyTerms": [
-    { "term": string, "definition": string, "ts": number | null }
-  ],
-  "examHints": [
-    { "hint": string, "ts": number | null }
-  ],
-  "openQuestions": string[],
-  "lastUpdatedChunkId": string | null
+  "lastUpdatedAt": "string | null",
+  "lastChunkId": "string | null"
 }
 ```
 
-## Technical Details
+## Installation (Load Unpacked)
 
-- **Manifest Version**: V3
-- **Storage**: Uses `chrome.storage.session` for notes state
-- **Caption Detection**: Automatically selects best caption track (prefers English)
-- **Video Detection**: Finds largest visible or currently playing video
-- **Robustness**: Handles dynamic video changes, missing captions, and extension reloads
+1. Clone/download this repo.
+2. Open `chrome://extensions/`.
+3. Enable **Developer mode**.
+4. Click **Load unpacked** and select this folder.
+5. Open any Panopto video page.
+6. Open the extension side panel.
 
-## LLM Integration
+## Usage
 
-Currently, the extension uses a **mock LLM function** that generates deterministic fake notes for testing. The function `updateNotesWithLLM()` in `service-worker.js` can be replaced with a real API call.
+1. Open side panel.
+2. In **AI Settings**:
+   - Choose provider
+   - Paste API key for that provider
+   - (Optional) click **Test Provider**
+   - Turn AI Notes ON and click **Save**
+3. Press **Start** to begin capture.
+4. Watch live transcript update.
+5. Notes update after chunk finalize (or press **Pause** to force finalize).
+6. Press **Export Markdown** to download notes.
 
-To integrate a real LLM API:
+## Controls
 
-1. Update `updateNotesWithLLM()` in `service-worker.js`
-2. Add API key configuration (use `chrome.storage.local` for persistence)
-3. Implement proper error handling
+- `Start`: begin capture
+- `Pause`: pause capture + finalize current chunk
+- `Clear`: clear transcript and notes state
+- `Export Markdown`: export current notes as `.md`
+- `Save` (AI Settings): persist provider/toggle/keys
+- `Test Provider`: verify current provider key/model connectivity
 
-Example structure:
-```javascript
-async function updateNotesWithLLM(notes, chunk, tailContext) {
-  const response = await fetch('YOUR_API_ENDPOINT', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer YOUR_API_KEY'
-    },
-    body: JSON.stringify({
-      notes_state: notes,
-      new_chunk: chunk,
-      tail_context: tailContext
-    })
-  });
-  
-  const updatedNotes = await response.json();
-  return updatedNotes; // Must return updated notes_state JSON
-}
-```
+## Provider Notes
+
+- Keys are user-provided (BYOK).
+- Keys are stored in `chrome.storage.local`.
+- No keys are hardcoded in repository files.
+- Model resolution includes provider-specific fallback behavior.
+
+## Architecture
+
+- `content-script.js`
+  - DOM-based caption detection/capture
+  - transcript buffer + chunk creation/finalize triggers
+- `service-worker.js`
+  - provider abstraction (Gemini/OpenAI/Anthropic)
+  - 2-stage AI pipeline (clean + merge)
+  - JSON parse/repair validation
+  - quality merge/dedupe hardening
+  - notes persistence + markdown export
+- `sidepanel.html` / `sidepanel.js` / `sidepanel.css`
+  - controls, status UI, AI settings, transcript + notes rendering
 
 ## Troubleshooting
 
-### Captions Not Detected
+### Captions not detected
 
-- Ensure the video has captions/subtitles enabled
-- Check that the video player has loaded completely
-- Try refreshing the page
+- Ensure captions are enabled in Panopto player.
+- Refresh the video tab after reloading the extension.
+- Confirm `Caption element detected` appears in the side panel.
 
-### Extension Not Working
+### Provider test fails
 
-- Check browser console for errors (F12 → Console)
-- Verify the extension is enabled in `chrome://extensions/`
-- Try reloading the extension
+- Verify key is for selected provider.
+- Check quota/billing/status for that provider.
+- Open extension service worker console (`chrome://extensions` -> extension -> Service worker -> Inspect) for exact API error.
 
-### Notes Not Updating
+### Notes not updating
 
-- Ensure captions are being captured (check "Live Transcript" section)
-- Wait for chunks to finalize (every ~2 minutes)
-- Check service worker console for errors
+- Confirm AI Notes is ON.
+- Confirm provider key exists for selected provider.
+- Wait for chunk finalize, or press Pause to force finalize.
 
-## Development
+## Security and Privacy
 
-### File Structure
+- Captured transcript and notes stay in browser storage.
+- External API calls only happen when AI Notes is enabled and a provider key is configured.
+- Review permissions in `manifest.json` before production release.
 
-```
-panopto-smart-notes/
-├── manifest.json          # Extension manifest
-├── service-worker.js      # Background service worker
-├── content-script.js      # Content script for caption capture
-├── sidepanel.html         # Side panel HTML
-├── sidepanel.js           # Side panel JavaScript
-├── sidepanel.css          # Side panel styles
-├── icon16.png            # Extension icon (16x16)
-├── icon48.png            # Extension icon (48x48)
-├── icon128.png           # Extension icon (128x128)
-└── README.md             # This file
-```
+## Current Status
 
-### Testing
-
-1. Load extension as unpacked
-2. Navigate to a page with video + captions
-3. Open side panel and start capture
-4. Verify captions appear in transcript
-5. Wait for chunks to finalize and notes to appear
-6. Test export functionality
-
-## License
-
-MIT License - feel free to use and modify as needed.
-
-## Notes
-
-- This is an MVP version with mock LLM integration
-- Real API integration requires updating `updateNotesWithLLM()` function
-- Extension works locally without external dependencies
-- All data is stored locally in browser session storage
+This is a working MVP with real provider integrations and local quality hardening.  
+Before public launch, you should still complete permission narrowing, privacy policy/docs, and release hardening.
