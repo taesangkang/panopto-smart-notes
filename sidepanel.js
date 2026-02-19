@@ -4,8 +4,25 @@
 (function() {
   'use strict';
 
+  const PROVIDERS = {
+    GEMINI: 'gemini',
+    OPENAI: 'openai',
+    ANTHROPIC: 'anthropic'
+  };
+  const DEFAULT_PROVIDER = PROVIDERS.GEMINI;
+  const THEME_SYSTEM = 'system';
+  const THEME_LIGHT = 'light';
+  const THEME_DARK = 'dark';
+
+  const PROVIDER_LABELS = {
+    [PROVIDERS.GEMINI]: 'Gemini',
+    [PROVIDERS.OPENAI]: 'ChatGPT (OpenAI)',
+    [PROVIDERS.ANTHROPIC]: 'Claude (Anthropic)'
+  };
+
   const captionsStatusEl = document.getElementById('captions-status');
   const captureStatusEl = document.getElementById('capture-status');
+  const aiInlineStatusEl = document.getElementById('ai-inline-status');
   const startBtn = document.getElementById('start-btn');
   const pauseBtn = document.getElementById('pause-btn');
   const clearBtn = document.getElementById('clear-btn');
@@ -17,14 +34,25 @@
   const cancelNotesBtn = document.getElementById('cancel-notes-btn');
   const notesEditStatusEl = document.getElementById('notes-edit-status');
 
+  const openSettingsBtn = document.getElementById('open-settings-btn');
+  const settingsModalEl = document.getElementById('settings-modal');
+  const settingsModalBackdropEl = document.getElementById('settings-modal-backdrop');
+  const closeSettingsBtn = document.getElementById('close-settings-btn');
+  const settingsStatusEl = document.getElementById('settings-status');
+  const settingsTabButtons = Array.from(document.querySelectorAll('.settings-tab'));
+  const settingsTabPanels = Array.from(document.querySelectorAll('.settings-tab-panel'));
+
   const aiEnabledToggle = document.getElementById('ai-enabled-toggle');
   const providerSelect = document.getElementById('provider-select');
-  const geminiApiKeyInput = document.getElementById('gemini-api-key');
-  const openaiApiKeyInput = document.getElementById('openai-api-key');
-  const anthropicApiKeyInput = document.getElementById('anthropic-api-key');
+  const providerApiKeyInput = document.getElementById('provider-api-key');
+  const toggleProviderKeyVisibilityBtn = document.getElementById('toggle-provider-key-visibility');
+  const providerKeyStatusEl = document.getElementById('provider-key-status');
+  const clearKeyBtn = document.getElementById('clear-key-btn');
   const saveSettingsBtn = document.getElementById('save-settings-btn');
   const testProviderBtn = document.getElementById('test-provider-btn');
-  const settingsStatusEl = document.getElementById('settings-status');
+  const themeSelect = document.getElementById('theme-select');
+
+  const systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
   let currentTranscript = [];
   let currentNotes = null;
@@ -33,15 +61,22 @@
   let isEditingNotes = false;
   let notesDraftText = '';
   let pendingNotesUpdateWhileEditing = false;
+  let isSettingsModalOpen = false;
+  let activeSettingsTab = 'general';
+  let isProviderKeyVisible = false;
+  let themePreference = THEME_SYSTEM;
 
   function init() {
     setupEventListeners();
-    requestStatus();
-    loadNotesState();
-    loadAiSettings();
     setupMessageListener();
+    setupThemeListener();
     toggleNotesEditButtons();
     setNotesEditStatus('', '');
+    setSettingsStatus('', false);
+    setAiInlineStatus('', '');
+    requestStatus();
+    loadNotesState();
+    loadSettingsFromStorage();
   }
 
   function setupEventListeners() {
@@ -97,9 +132,84 @@
       cancelNotesBtn.addEventListener('click', cancelNotesEdit);
     }
 
-    providerSelect.addEventListener('change', renderProviderHints);
+    if (openSettingsBtn) {
+      openSettingsBtn.addEventListener('click', openSettingsModal);
+    }
+    if (closeSettingsBtn) {
+      closeSettingsBtn.addEventListener('click', closeSettingsModal);
+    }
+    if (settingsModalBackdropEl) {
+      settingsModalBackdropEl.addEventListener('click', closeSettingsModal);
+    }
+    settingsTabButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        activateSettingsTab(button.dataset.tab || 'general');
+      });
+    });
+
+    providerSelect.addEventListener('change', renderProviderUiState);
+    toggleProviderKeyVisibilityBtn.addEventListener('click', toggleProviderKeyVisibility);
     saveSettingsBtn.addEventListener('click', saveAiSettings);
     testProviderBtn.addEventListener('click', testProviderConnection);
+    clearKeyBtn.addEventListener('click', clearProviderKey);
+    themeSelect.addEventListener('change', onThemeSelectionChange);
+
+    window.addEventListener('keydown', handleGlobalKeydown);
+  }
+
+  function setupThemeListener() {
+    if (typeof systemThemeQuery.addEventListener === 'function') {
+      systemThemeQuery.addEventListener('change', handleSystemThemeChange);
+      return;
+    }
+    if (typeof systemThemeQuery.addListener === 'function') {
+      systemThemeQuery.addListener(handleSystemThemeChange);
+    }
+  }
+
+  function handleSystemThemeChange() {
+    if (themePreference === THEME_SYSTEM) {
+      applyThemePreference(themePreference);
+    }
+  }
+
+  function handleGlobalKeydown(event) {
+    if (event.key === 'Escape' && isSettingsModalOpen) {
+      closeSettingsModal();
+    }
+  }
+
+  function openSettingsModal() {
+    if (!settingsModalEl) return;
+    settingsModalEl.hidden = false;
+    settingsModalEl.setAttribute('aria-hidden', 'false');
+    isSettingsModalOpen = true;
+    activateSettingsTab(activeSettingsTab);
+    setSettingsStatus('', false);
+  }
+
+  function closeSettingsModal() {
+    if (!settingsModalEl) return;
+    settingsModalEl.hidden = true;
+    settingsModalEl.setAttribute('aria-hidden', 'true');
+    isSettingsModalOpen = false;
+  }
+
+  function activateSettingsTab(tabName) {
+    const nextTab = tabName || 'general';
+    activeSettingsTab = nextTab;
+
+    settingsTabButtons.forEach((button) => {
+      const isActive = button.dataset.tab === nextTab;
+      button.classList.toggle('active', isActive);
+      button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+
+    settingsTabPanels.forEach((panel) => {
+      const isActive = panel.id === `tab-${nextTab}`;
+      panel.classList.toggle('active', isActive);
+      panel.hidden = !isActive;
+    });
   }
 
   function requestStatus() {
@@ -185,6 +295,20 @@
         }
         currentNotes = changes.notesState.newValue;
         renderNotes();
+        return;
+      }
+
+      if (areaName === 'local') {
+        if (changes.aiSettings) {
+          loadSettingsFromStorage();
+          return;
+        }
+        if (changes.theme) {
+          const nextTheme = normalizeTheme(changes.theme.newValue);
+          themePreference = nextTheme;
+          themeSelect.value = nextTheme;
+          applyThemePreference(nextTheme);
+        }
       }
     });
   }
@@ -561,55 +685,119 @@
     }
   }
 
-  async function loadAiSettings() {
+  async function loadSettingsFromStorage() {
     try {
-      const response = await chrome.runtime.sendMessage({ type: 'GET_AI_SETTINGS' });
-      const settings = response && response.settings ? response.settings : {};
-      latestAiSettings = settings;
+      const local = await chrome.storage.local.get(['aiSettings', 'theme']);
+      const localAiSettings = buildLocalAiSettingsView(local.aiSettings);
+      let resolvedSettings = null;
 
-      aiEnabledToggle.checked = Boolean(settings.aiNotesEnabled);
-      providerSelect.value = settings.provider || 'gemini';
-      renderProviderHints();
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'GET_AI_SETTINGS' });
+        resolvedSettings = response && response.settings ? response.settings : null;
+      } catch (error) {
+        resolvedSettings = null;
+      }
 
-      const keyConfigured = settings.keyConfigured || {};
-      const provider = settings.provider || 'gemini';
-      const isProviderConfigured = Boolean(keyConfigured[provider]);
-      const modelText = settings.activeModel ? ` (${settings.activeModel})` : '';
-      const providerLabel = providerSelect.options[providerSelect.selectedIndex]?.text || provider;
+      latestAiSettings = mergeAiSettings(localAiSettings, resolvedSettings);
 
-      setSettingsStatus(
-        isProviderConfigured
-          ? `${providerLabel} key saved${modelText}.`
-          : `No key saved for ${providerLabel}.`,
-        !isProviderConfigured
-      );
+      aiEnabledToggle.checked = Boolean(latestAiSettings.aiNotesEnabled);
+      providerSelect.value = latestAiSettings.provider;
+      providerApiKeyInput.value = '';
+      setProviderKeyInputVisible(false);
+
+      const nextTheme = normalizeTheme(local.theme);
+      themePreference = nextTheme;
+      themeSelect.value = nextTheme;
+      applyThemePreference(nextTheme);
+
+      renderProviderUiState();
+      updateAiInlineStatus();
     } catch (error) {
-      setSettingsStatus('Failed to load AI settings.', true);
+      setSettingsStatus('Failed to load settings.', true);
     }
   }
 
-  function renderProviderHints() {
-    const provider = providerSelect.value;
-    geminiApiKeyInput.placeholder = provider === 'gemini'
-      ? 'Active provider: paste Gemini API key'
-      : 'Paste Gemini API key (optional)';
-    openaiApiKeyInput.placeholder = provider === 'openai'
-      ? 'Active provider: paste OpenAI API key'
-      : 'Paste OpenAI API key (optional)';
-    anthropicApiKeyInput.placeholder = provider === 'anthropic'
-      ? 'Active provider: paste Anthropic API key'
-      : 'Paste Anthropic API key (optional)';
+  function buildLocalAiSettingsView(stored) {
+    const source = stored && typeof stored === 'object' ? stored : {};
+    const provider = isValidProvider(source.provider) ? source.provider : DEFAULT_PROVIDER;
+    const keys = source.keys && typeof source.keys === 'object' ? source.keys : {};
+
+    return {
+      aiNotesEnabled: Boolean(source.aiNotesEnabled),
+      provider,
+      activeModel: null,
+      keyConfigured: {
+        [PROVIDERS.GEMINI]: Boolean(typeof keys[PROVIDERS.GEMINI] === 'string' && keys[PROVIDERS.GEMINI].trim()),
+        [PROVIDERS.OPENAI]: Boolean(typeof keys[PROVIDERS.OPENAI] === 'string' && keys[PROVIDERS.OPENAI].trim()),
+        [PROVIDERS.ANTHROPIC]: Boolean(typeof keys[PROVIDERS.ANTHROPIC] === 'string' && keys[PROVIDERS.ANTHROPIC].trim())
+      }
+    };
+  }
+
+  function mergeAiSettings(localView, resolvedView) {
+    const base = localView || buildLocalAiSettingsView(null);
+    if (!resolvedView || typeof resolvedView !== 'object') {
+      return base;
+    }
+
+    return {
+      aiNotesEnabled: Boolean(resolvedView.aiNotesEnabled),
+      provider: isValidProvider(resolvedView.provider) ? resolvedView.provider : base.provider,
+      activeModel: typeof resolvedView.activeModel === 'string' && resolvedView.activeModel.trim()
+        ? resolvedView.activeModel.trim()
+        : null,
+      keyConfigured: resolvedView.keyConfigured && typeof resolvedView.keyConfigured === 'object'
+        ? {
+          [PROVIDERS.GEMINI]: Boolean(resolvedView.keyConfigured[PROVIDERS.GEMINI]),
+          [PROVIDERS.OPENAI]: Boolean(resolvedView.keyConfigured[PROVIDERS.OPENAI]),
+          [PROVIDERS.ANTHROPIC]: Boolean(resolvedView.keyConfigured[PROVIDERS.ANTHROPIC])
+        }
+        : base.keyConfigured
+    };
+  }
+
+  function renderProviderUiState() {
+    const provider = getSelectedProvider();
+    const label = getProviderLabel(provider);
+    providerApiKeyInput.placeholder = `Paste ${label} API key`;
+
+    const hasSavedKey = Boolean(latestAiSettings &&
+      latestAiSettings.keyConfigured &&
+      latestAiSettings.keyConfigured[provider]);
+    if (hasSavedKey) {
+      providerKeyStatusEl.textContent = `${label} key is saved. Enter a new value to replace it.`;
+      providerKeyStatusEl.className = 'provider-key-status success';
+    } else {
+      providerKeyStatusEl.textContent = `No ${label} key saved.`;
+      providerKeyStatusEl.className = 'provider-key-status warning';
+    }
+  }
+
+  function getSelectedProvider() {
+    return isValidProvider(providerSelect.value) ? providerSelect.value : DEFAULT_PROVIDER;
+  }
+
+  function getProviderLabel(provider) {
+    return PROVIDER_LABELS[provider] || provider;
+  }
+
+  function toggleProviderKeyVisibility() {
+    setProviderKeyInputVisible(!isProviderKeyVisible);
+  }
+
+  function setProviderKeyInputVisible(visible) {
+    isProviderKeyVisible = Boolean(visible);
+    providerApiKeyInput.type = isProviderKeyVisible ? 'text' : 'password';
+    toggleProviderKeyVisibilityBtn.textContent = isProviderKeyVisible ? 'Hide' : 'Show';
   }
 
   async function saveAiSettings() {
     const aiNotesEnabled = aiEnabledToggle.checked;
-    const provider = providerSelect.value;
-    const keys = {
-      gemini: geminiApiKeyInput.value.trim(),
-      openai: openaiApiKeyInput.value.trim(),
-      anthropic: anthropicApiKeyInput.value.trim()
-    };
+    const provider = getSelectedProvider();
+    const rawKey = providerApiKeyInput.value.trim();
+    const keys = rawKey ? { [provider]: rawKey } : {};
 
+    saveSettingsBtn.disabled = true;
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'SAVE_AI_SETTINGS',
@@ -622,24 +810,63 @@
         throw new Error((response && response.error) || 'Save failed');
       }
 
-      geminiApiKeyInput.value = '';
-      openaiApiKeyInput.value = '';
-      anthropicApiKeyInput.value = '';
-      latestAiSettings = response.settings || latestAiSettings;
-      const providerLabel = providerSelect.options[providerSelect.selectedIndex]?.text || provider;
-      setSettingsStatus(`AI settings saved. Active provider: ${providerLabel}.`, false);
+      latestAiSettings = mergeAiSettings(
+        latestAiSettings || buildLocalAiSettingsView(null),
+        response.settings
+      );
+      if (rawKey) {
+        latestAiSettings.keyConfigured[provider] = true;
+      }
+
+      providerApiKeyInput.value = '';
+      setProviderKeyInputVisible(false);
+      renderProviderUiState();
+      updateAiInlineStatus();
+
+      const providerLabel = getProviderLabel(provider);
+      setSettingsStatus(`Settings saved. Active provider: ${providerLabel}.`, false);
     } catch (error) {
       setSettingsStatus(`Failed to save settings: ${error.message}`, true);
+    } finally {
+      saveSettingsBtn.disabled = false;
+    }
+  }
+
+  async function clearProviderKey() {
+    const provider = getSelectedProvider();
+    const providerLabel = getProviderLabel(provider);
+    clearKeyBtn.disabled = true;
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'CLEAR_PROVIDER_KEY',
+        provider
+      });
+
+      if (!response || !response.success) {
+        throw new Error((response && response.error) || 'Clear key failed');
+      }
+
+      latestAiSettings = mergeAiSettings(
+        latestAiSettings || buildLocalAiSettingsView(null),
+        response.settings
+      );
+      providerApiKeyInput.value = '';
+      setProviderKeyInputVisible(false);
+      renderProviderUiState();
+      updateAiInlineStatus();
+      setSettingsStatus(`${providerLabel} key cleared.`, false);
+    } catch (error) {
+      setSettingsStatus(`Failed to clear key: ${error.message}`, true);
+    } finally {
+      clearKeyBtn.disabled = false;
     }
   }
 
   async function testProviderConnection() {
-    const provider = providerSelect.value;
-    const keys = {
-      gemini: geminiApiKeyInput.value.trim(),
-      openai: openaiApiKeyInput.value.trim(),
-      anthropic: anthropicApiKeyInput.value.trim()
-    };
+    const provider = getSelectedProvider();
+    const rawKey = providerApiKeyInput.value.trim();
+    const keys = rawKey ? { [provider]: rawKey } : {};
 
     setSettingsStatus('Testing provider connection...', false);
     testProviderBtn.disabled = true;
@@ -655,7 +882,7 @@
         throw new Error((response && response.error) || 'Provider test failed');
       }
 
-      const providerName = response.provider || provider;
+      const providerName = getProviderLabel(response.provider || provider);
       const modelName = response.model ? ` (${response.model})` : '';
       setSettingsStatus(`${providerName} connection OK${modelName}.`, false);
     } catch (error) {
@@ -665,11 +892,79 @@
     }
   }
 
+  async function onThemeSelectionChange() {
+    const nextTheme = normalizeTheme(themeSelect.value);
+    themePreference = nextTheme;
+    applyThemePreference(nextTheme);
+
+    try {
+      await chrome.storage.local.set({ theme: nextTheme });
+      setSettingsStatus(`Theme set to ${nextTheme}.`, false);
+    } catch (error) {
+      setSettingsStatus('Failed to save theme preference.', true);
+    }
+  }
+
+  function normalizeTheme(value) {
+    if (value === THEME_LIGHT || value === THEME_DARK || value === THEME_SYSTEM) {
+      return value;
+    }
+    return THEME_SYSTEM;
+  }
+
+  function applyThemePreference(preference) {
+    const pref = normalizeTheme(preference);
+    themePreference = pref;
+    const effectiveTheme = pref === THEME_SYSTEM
+      ? (systemThemeQuery.matches ? THEME_DARK : THEME_LIGHT)
+      : pref;
+    document.documentElement.dataset.theme = effectiveTheme;
+  }
+
+  function updateAiInlineStatus() {
+    if (!latestAiSettings) {
+      setAiInlineStatus('AI settings unavailable.', 'warning');
+      return;
+    }
+
+    const aiEnabled = Boolean(latestAiSettings.aiNotesEnabled);
+    const provider = isValidProvider(latestAiSettings.provider) ? latestAiSettings.provider : DEFAULT_PROVIDER;
+    const providerLabel = getProviderLabel(provider);
+    const hasKey = Boolean(latestAiSettings.keyConfigured && latestAiSettings.keyConfigured[provider]);
+
+    if (!aiEnabled) {
+      setAiInlineStatus('AI disabled.', 'warning');
+      return;
+    }
+    if (!hasKey) {
+      setAiInlineStatus(`No API key set for ${providerLabel}.`, 'warning');
+      return;
+    }
+    setAiInlineStatus(`AI enabled (${providerLabel}).`, 'success');
+  }
+
+  function setAiInlineStatus(message, variant) {
+    if (!aiInlineStatusEl) return;
+    aiInlineStatusEl.textContent = message || '';
+    aiInlineStatusEl.className = variant
+      ? `ai-inline-status ${variant}`
+      : 'ai-inline-status';
+  }
+
   function setSettingsStatus(message, isError) {
-    settingsStatusEl.textContent = message;
+    if (!settingsStatusEl) return;
+    settingsStatusEl.textContent = message || '';
+    if (!message) {
+      settingsStatusEl.className = 'settings-status';
+      return;
+    }
     settingsStatusEl.className = isError
       ? 'settings-status error'
       : 'settings-status success';
+  }
+
+  function isValidProvider(value) {
+    return value === PROVIDERS.GEMINI || value === PROVIDERS.OPENAI || value === PROVIDERS.ANTHROPIC;
   }
 
   function seekToTime(time) {

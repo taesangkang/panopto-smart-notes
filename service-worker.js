@@ -99,6 +99,12 @@
           .catch((error) => sendResponse({ success: false, error: error.message }));
         return true;
 
+      case 'CLEAR_PROVIDER_KEY':
+        clearProviderKey(message.provider)
+          .then((settings) => sendResponse({ success: true, settings: buildAiSettingsView(settings) }))
+          .catch((error) => sendResponse({ success: false, error: error.message }));
+        return true;
+
       case 'TEST_AI_PROVIDER':
         testAiProvider(message)
           .then((result) => sendResponse({ success: true, ...result }))
@@ -916,6 +922,30 @@
       });
     }
 
+    await chrome.storage.local.set({ aiSettings: next });
+    return getAiSettings();
+  }
+
+  async function clearProviderKey(provider) {
+    if (!isValidProvider(provider)) {
+      throw new Error(`Unsupported provider: ${provider}`);
+    }
+
+    const result = await chrome.storage.local.get(['aiSettings']);
+    const stored = result.aiSettings || {};
+    const next = {
+      ...stored,
+      keys: {
+        [PROVIDERS.GEMINI]: getStoredKey(stored, PROVIDERS.GEMINI) || (typeof stored.apiKey === 'string' ? stored.apiKey.trim() : ''),
+        [PROVIDERS.OPENAI]: getStoredKey(stored, PROVIDERS.OPENAI),
+        [PROVIDERS.ANTHROPIC]: getStoredKey(stored, PROVIDERS.ANTHROPIC)
+      }
+    };
+
+    next.keys[provider] = '';
+    if (provider === PROVIDERS.GEMINI) {
+      next.apiKey = '';
+    }
     await chrome.storage.local.set({ aiSettings: next });
     return getAiSettings();
   }
