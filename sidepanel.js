@@ -454,7 +454,7 @@
           ? section.bullets.map((bullet) => String(bullet || '').trim()).filter(Boolean)
           : []
       }))
-      .filter((section) => section.heading && section.bullets.length > 0);
+      .filter((section) => section.heading);
 
     const previousTitle = previousNotes && typeof previousNotes.title === 'string' && previousNotes.title.trim()
       ? previousNotes.title.trim()
@@ -462,7 +462,7 @@
     const nextTitle = title !== null ? title : previousTitle;
 
     if (!nextTitle && cleanedSections.length === 0) {
-      throw new Error('Add a title or at least one bullet.');
+      throw new Error('Add a title, section heading, or bullet.');
     }
 
     const previousChunkId = previousNotes && typeof previousNotes.lastChunkId === 'string' && previousNotes.lastChunkId.trim()
