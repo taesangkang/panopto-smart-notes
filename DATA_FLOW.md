@@ -2,197 +2,196 @@
 
 ## Overview
 
-This document explains how data flows through the Panopto Smart Notes extension.
+This document describes the runtime data flow in the current implementation of Panopto Smart Notes.
 
 ## Components
 
-1. **Content Script** (`content-script.js`) - Runs in page context
-2. **Service Worker** (`service-worker.js`) - Background script
-3. **Side Panel** (`sidepanel.html/js`) - UI component
+1. Content script (`content-script.js`): runs in page context, captures captions, builds transcript/chunks.
+2. Service worker (`service-worker.js`): receives events, runs AI pipeline, persists and broadcasts notes.
+3. Side panel (`sidepanel.html`, `sidepanel.js`): UI for controls, transcript, notes, and settings.
 
-## Data Flow
+## End-To-End Flow
 
-### 1. Caption Capture Flow
+### 1. Caption capture in page context
 
-```
-Video Element (Page)
-    ↓
-Content Script detects video.textTracks
-    ↓
-Selects best caption track (prefers English)
-    ↓
-Listens to track.addEventListener('cuechange')
-    ↓
-On cuechange: Reads VTTCue.activeCues
-    ↓
-Normalizes text (trim, collapse whitespace)
-    ↓
-Appends to transcriptBuffer[]
-    ↓
-Updates currentChunk
+```text
+Page DOM updates
+  -> content script MutationObservers run
+  -> video element and caption element are discovered/validated
+  -> caption text is normalized
+  -> transcript entry is deduped/inserted or previous entry is replaced
+  -> current chunk text is updated
+  -> STATUS_UPDATE + TRANSCRIPT_UPDATE are emitted
 ```
 
-### 2. Chunk Finalization Flow
+The content script only appends transcript data while `isCapturing` is true.
 
-```
-Content Script detects chunk should finalize:
-  - 120 seconds elapsed OR
-  - >1500 characters OR
-  - Video paused/ended
-    ↓
-Creates finalized chunk object:
-  {
-    chunkId: "chunk_123...",
-    tStart: 45.2,
-    tEnd: 125.8,
-    text: "Full chunk text..."
-  }
-    ↓
-Gets tail context (last 30 seconds)
-    ↓
-Sends message to Service Worker:
-  {
-    type: 'FINALIZE_CHUNK',
-    chunk: {...},
-    tailContext: "..."
-  }
+### 2. Chunk finalization
+
+```text
+Chunk is finalized when any condition is true:
+  - elapsed >= 180 seconds
+  - chunk text length > 5000 chars
+  - video is paused or ended
+  -> build finalized chunk payload
+  -> compute tailContext from last 30 seconds of transcript
+  -> send FINALIZE_CHUNK to service worker
 ```
 
-### 3. LLM Processing Flow
+Finalized chunk shape:
 
-```
-Service Worker receives FINALIZE_CHUNK
-    ↓
-Retrieves current notes state from chrome.storage.session
-    ↓
-Calls updateNotesWithLLM(notes, chunk, tailContext)
-    ↓
-[Mock LLM Function]
-  - Parses chunk text
-  - Extracts headings, terms, hints, questions
-  - Updates notes structure
-  - Returns updated notes JSON
-    ↓
-Saves updated notes to chrome.storage.session
-    ↓
-Broadcasts NOTES_UPDATE to Side Panel
+```json
+{
+  "chunkId": "chunk_123...",
+  "tStart": 45.2,
+  "tEnd": 125.8,
+  "text": "Full chunk text..."
+}
 ```
 
-### 4. UI Update Flow
+### 3. AI note update pipeline in service worker
 
-```
-Side Panel receives updates via:
-  A) chrome.runtime.onMessage (direct messages)
-  B) chrome.storage.onChanged (storage changes)
-    ↓
-Updates local state (currentTranscript, currentNotes)
-    ↓
-Re-renders UI:
-  - Live Transcript section
-  - Smart Notes section
+```text
+Service worker receives FINALIZE_CHUNK
+  -> load notesState from chrome.storage.session
+  -> load aiSettings from chrome.storage.local
+  -> if AI disabled or provider key missing: stop
+  -> enforce minimum LLM call interval
+  -> run caption-cleaning model call
+  -> run notes-merging model call
+  -> parse/repair/normalize returned JSON
+  -> quality-merge with previous notes
+  -> save notesState to chrome.storage.session
+  -> broadcast NOTES_UPDATE
 ```
 
-### 5. User Control Flow
+### 4. Side panel UI updates
 
+```text
+Side panel receives runtime messages and storage change events
+  -> update local transcript/notes/settings state
+  -> render status, transcript, notes, and settings UI
 ```
-User clicks "Start" in Side Panel
-    ↓
-Side Panel sends: { type: 'START_CAPTURE' }
-    ↓
-Content Script receives message
-    ↓
-Sets isCapturing = true
-    ↓
-Begins processing cuechange events
-    ↓
-Sends STATUS_UPDATE back to Side Panel
+
+### 5. User control path
+
+```text
+User clicks Start in side panel
+  -> side panel sends START_CAPTURE to active tab
+  -> content script sets isCapturing = true
+  -> content script emits STATUS_UPDATE
+```
+
+Pause flow:
+
+```text
+User clicks Pause
+  -> side panel sends PAUSE_CAPTURE
+  -> content script sets isCapturing = false
+  -> content script finalizes current chunk if present
+```
+
+Clear flow:
+
+```text
+User clicks Clear
+  -> side panel clears local UI state
+  -> side panel sends CLEAR_SESSION to all tabs (content scripts)
+  -> side panel sends CLEAR_SESSION to service worker
+  -> service worker removes notesState from session storage
 ```
 
 ## Message Types
 
-### Content Script → Service Worker
-- `FINALIZE_CHUNK` - New chunk ready for processing
-- `STATUS_UPDATE` - Caption detection/capture status
-- `TRANSCRIPT_UPDATE` - Live transcript updates
+### Content script -> service worker
 
-### Service Worker → Side Panel
-- `NOTES_UPDATE` - Updated notes state
-- `STATUS_UPDATE` - Status updates (forwarded)
-- `TRANSCRIPT_UPDATE` - Transcript updates (forwarded)
-- `ERROR` - Error messages
+- `FINALIZE_CHUNK`: finalized chunk + tail context for AI update.
+- `STATUS_UPDATE`: caption/video/capture status.
+- `TRANSCRIPT_UPDATE`: latest transcript slice and current chunk snapshot.
 
-### Side Panel → Service Worker
-- `GET_NOTES_STATE` - Request current notes
-- `UPDATE_NOTES_STATE` - Update notes (not used currently)
-- `EXPORT_MARKDOWN` - Request markdown export
-- `CLEAR_SESSION` - Clear all data
+### Service worker -> side panel
 
-### Side Panel → Content Script (via tabs.sendMessage)
-- `START_CAPTURE` - Begin capturing
-- `PAUSE_CAPTURE` - Pause capturing
-- `CLEAR_SESSION` - Clear transcript buffer
-- `GET_STATUS` - Request current status
-- `SEEK_VIDEO` - Seek video to timestamp
+- `NOTES_UPDATE`: updated notes state.
+- `STATUS_UPDATE`: forwarded from content script.
+- `TRANSCRIPT_UPDATE`: forwarded from content script.
+- `ERROR`: provider/model/runtime errors.
+
+### Side panel -> service worker
+
+- `GET_NOTES_STATE`
+- `GET_AI_SETTINGS`
+- `SAVE_AI_SETTINGS`
+- `CLEAR_PROVIDER_KEY`
+- `TEST_AI_PROVIDER`
+- `SAVE_NOTES_STATE`
+- `EXPORT_MARKDOWN`
+- `CLEAR_SESSION`
+
+### Side panel -> content script (via `chrome.tabs.sendMessage`)
+
+- `START_CAPTURE`
+- `PAUSE_CAPTURE`
+- `CLEAR_SESSION`
+- `GET_STATUS`
+- `SEEK_VIDEO`
 
 ## Storage
 
-### chrome.storage.session
-- `notesState` - Current structured notes JSON
-  ```json
-  {
-    "title": string | null,
-    "outline": [...],
-    "keyTerms": [...],
-    "examHints": [...],
-    "openQuestions": [...],
-    "lastUpdatedChunkId": string | null
-  }
-  ```
+### `chrome.storage.session`
 
-### In-Memory (Content Script)
-- `transcriptBuffer[]` - Array of caption entries
-- `currentChunk` - Current chunk being built
-- `isCapturing` - Capture state flag
+- `notesState`
 
-## Chunking Logic
+```json
+{
+  "title": "string | null",
+  "sections": [
+    {
+      "heading": "string",
+      "bullets": ["string"]
+    }
+  ],
+  "lastUpdatedAt": "string | null",
+  "lastChunkId": "string | null"
+}
+```
 
-A chunk is finalized when ANY condition is met:
+### `chrome.storage.local`
 
-1. **Time-based**: 120 seconds elapsed since chunk start
-2. **Size-based**: >1500 characters accumulated
-3. **State-based**: Video paused or ended
+- `aiSettings`
+- `theme`
 
-Each chunk includes:
-- `chunkId` - Unique identifier
-- `tStart` - Start timestamp (video time)
-- `tEnd` - End timestamp (video time)
-- `text` - Full chunk text
+`aiSettings` contains:
 
-## Tail Context
+- `aiNotesEnabled`
+- `provider`
+- `keys` per provider (`gemini`, `openai`, `anthropic`)
+- `models` per provider
 
-For LLM continuity, the last 30 seconds of transcript are sent as `tailContext`:
+### In-memory state (content script)
+
+- `transcriptBuffer[]`
+- `currentChunk`
+- `isCapturing`
+- status timing markers (`lastCaptionUpdateAt`, `lastVideoMoveAt`)
+
+## Tail Context Logic
+
+Tail context is built from the last 30 seconds of transcript relative to current video time:
 
 ```javascript
-const cutoffTime = videoElement.currentTime - 30;
+const cutoff = getVideoTime() - 30;
 const tailContext = transcriptBuffer
-  .filter(entry => entry.startTime >= cutoffTime)
-  .map(entry => entry.text)
+  .filter((entry) => entry.startTime >= cutoff)
+  .map((entry) => entry.text)
   .join(' ');
 ```
 
-This helps the LLM maintain context across chunk boundaries.
+This provides local continuity across chunk boundaries.
 
-## Error Handling
+## Error Handling And Robustness
 
-- **No captions detected**: Status shows "Not Detected", capture disabled
-- **Video not found**: Periodic retry every 2 seconds
-- **LLM error**: Error message broadcast to side panel
-- **Storage error**: Console error, graceful degradation
-
-## Robustness Features
-
-1. **MutationObserver**: Watches for dynamic video changes
-2. **Periodic video check**: Re-attaches if video removed
-3. **Duplicate detection**: Prevents same cue from being added twice
-4. **Text normalization**: Cleans up caption text
-5. **Storage persistence**: Notes survive extension reload (session storage)
+- Missing caption element: observer keeps searching and status reflects detection state.
+- Video element changes: periodic checks and mutation observer refresh references.
+- Duplicate/noisy caption updates: normalization + dedupe rules reduce churn.
+- AI/provider errors: service worker catches and emits `ERROR` messages.
+- Side panel availability: service worker broadcast errors are ignored if panel is closed.

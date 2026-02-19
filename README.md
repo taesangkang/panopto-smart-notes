@@ -1,69 +1,105 @@
 # Panopto Smart Notes
 
-A Chrome Extension (Manifest V3) that captures live Panopto captions from the page DOM and turns them into structured, cumulative AI notes.
+Chrome Extension (Manifest V3) that captures live Panopto captions from the DOM and turns them into cumulative structured notes with optional AI processing.
 
-## Features
+## Current Feature Set
 
-- Real-time caption capture from Panopto caption UI (DOM observers)
-- Live transcript feed with clickable timestamps
-- Smart chunking for note updates (time/size/pause-based finalize)
-- Multi-provider AI support (BYOK):
-  - Gemini
-  - OpenAI (ChatGPT API)
-  - Anthropic (Claude API)
-- AI settings panel:
-  - Provider selection
-  - Per-provider API keys
-  - AI Notes ON/OFF
-  - Provider connection test
-- Structured notes + Markdown export
-- Local persistence:
-  - Notes state in `chrome.storage.session`
-  - AI settings in `chrome.storage.local`
+- DOM-based live caption capture with mutation observers
+- Live transcript stream with clickable timestamps
+- Chunked note updates with pause-triggered finalization
+- Multi-provider BYOK AI support: Gemini, OpenAI, Anthropic
+- Side panel settings for provider selection, key management, and connection testing
+- Structured notes editing in the side panel
+- Markdown export of notes
+- Local/session persistence via Chrome storage APIs
 
-## How It Works
+## Architecture
 
-### Caption capture
+- `content-script.js`
+  - Finds a page video element and caption element
+  - Captures normalized caption text while capture is enabled
+  - Builds transcript entries and rolling chunks
+  - Sends status, transcript, and finalized chunk messages
+- `service-worker.js`
+  - Routes runtime messages between components
+  - Stores notes state and AI settings
+  - Runs AI processing pipeline on finalized chunks when enabled
+  - Normalizes/repairs/merges cumulative notes
+  - Exports notes as Markdown
+- `sidepanel.html`, `sidepanel.js`, `sidepanel.css`
+  - Displays status, transcript, and notes
+  - Handles capture controls
+  - Manages settings modal, provider keys, theme, and note editing
 
-The content script waits for and monitors caption elements in the page using `MutationObserver`, with these selectors:
+## Capture And Chunking Behavior
+
+### Caption element detection
+
+Content script checks, in order:
 
 1. `#dockedCaptionText`
 2. `[id*=Caption][id*=Text]`
-3. Elements with `role` or `aria-label` containing `caption`
+3. Any element whose `id` includes both `caption` and `text`
+4. `[role*="caption" i], [aria-label*="caption" i]`
+5. Any element whose `role` or `aria-label` includes `caption`
 
-Each caption update is timestamped using:
+### Video time source
 
-- `video#primaryVideo.currentTime`, or
-- first available `<video>` element fallback
+- Preferred: `video#primaryVideo`
+- Fallback: first `<video>` element on page
 
-### Dedupe behavior
+### Dedupe rules
 
-- Ignore empty text
-- Ignore exact duplicates
-- If new text starts with previous text (line growth), replace the previous entry
+- Ignore empty/whitespace-only caption text
+- Ignore exact duplicate consecutive caption text
+- If new caption starts with previous caption text, replace previous entry (growth update)
 - Otherwise append a new transcript entry
 
-### Chunk finalize rules
+### Finalize rules
 
-A chunk is finalized when any of:
+Current chunk finalizes when any condition is true:
 
-- 120 seconds elapsed
-- Text length exceeds ~1500 chars
-- Video paused/ended
+- 180 seconds elapsed since chunk start
+- Chunk text length exceeds 5000 chars
+- Video is paused or ended
 
-On finalize, the service worker runs a 2-stage AI pipeline:
+When finalized, content script sends:
 
-1. Caption cleaner
-2. Notes merger (cumulative JSON update)
+```json
+{
+  "type": "FINALIZE_CHUNK",
+  "chunk": {
+    "chunkId": "chunk_...",
+    "tStart": 0,
+    "tEnd": 0,
+    "text": "..."
+  },
+  "tailContext": "..."
+}
+```
 
-Then notes are merged with additional local quality checks:
+`tailContext` is built from transcript entries in the last 30 seconds of video time.
 
-- heading stability
-- section matching
+## AI Processing Pipeline
+
+When `aiNotesEnabled` is true and the selected provider key exists:
+
+1. Service worker applies a minimum interval rate limit between model calls.
+2. Stage 1 prompt cleans noisy captions into readable lecture text.
+3. Stage 2 prompt merges cleaned text into cumulative notes JSON.
+4. JSON is parsed, optionally repaired, normalized, and quality-merged.
+5. Updated notes are persisted to `chrome.storage.session` and broadcast to UI.
+
+Quality merge includes:
+
+- heading sanitization and section matching
 - semantic bullet dedupe
-- filtering of banned/low-value note content
+- filtering banned low-value bullets (e.g., generic study-tip content)
+- caps on sections and bullets per section
 
-## Notes JSON Schema (v1)
+## Data Models
+
+### Notes state (`chrome.storage.session.notesState`)
 
 ```json
 {
@@ -79,85 +115,95 @@ Then notes are merged with additional local quality checks:
 }
 ```
 
+### AI settings (`chrome.storage.local.aiSettings`)
+
+```json
+{
+  "aiNotesEnabled": "boolean",
+  "provider": "gemini | openai | anthropic",
+  "keys": {
+    "gemini": "string",
+    "openai": "string",
+    "anthropic": "string"
+  },
+  "models": {
+    "gemini": "string",
+    "openai": "string",
+    "anthropic": "string"
+  }
+}
+```
+
+### Theme preference (`chrome.storage.local.theme`)
+
+- `"system"` (default), `"light"`, or `"dark"`
+
+## Message Types
+
+### Content script -> service worker
+
+- `FINALIZE_CHUNK`
+- `STATUS_UPDATE`
+- `TRANSCRIPT_UPDATE`
+
+### Service worker -> side panel
+
+- `NOTES_UPDATE`
+- `STATUS_UPDATE` (forwarded)
+- `TRANSCRIPT_UPDATE` (forwarded)
+- `ERROR`
+
+### Side panel -> service worker
+
+- `GET_NOTES_STATE`
+- `GET_AI_SETTINGS`
+- `SAVE_AI_SETTINGS`
+- `CLEAR_PROVIDER_KEY`
+- `TEST_AI_PROVIDER`
+- `SAVE_NOTES_STATE`
+- `EXPORT_MARKDOWN`
+- `CLEAR_SESSION`
+
+### Side panel -> content script (via `chrome.tabs.sendMessage`)
+
+- `START_CAPTURE`
+- `PAUSE_CAPTURE`
+- `CLEAR_SESSION`
+- `GET_STATUS`
+- `SEEK_VIDEO`
+
 ## Installation (Load Unpacked)
 
-1. Clone/download this repo.
-2. Open `chrome://extensions/`.
-3. Enable **Developer mode**.
-4. Click **Load unpacked** and select this folder.
-5. Open any Panopto video page.
-6. Open the extension side panel.
+1. Open `chrome://extensions/`.
+2. Enable Developer mode.
+3. Click Load unpacked and select this project folder.
+4. Open a Panopto video tab and open the extension side panel.
 
 ## Usage
 
 1. Open side panel.
-2. In **AI Settings**:
-   - Choose provider
-   - Paste API key for that provider
-   - (Optional) click **Test Provider**
-   - Turn AI Notes ON and click **Save**
-3. Press **Start** to begin capture.
-4. Watch live transcript update.
-5. Notes update after chunk finalize (or press **Pause** to force finalize).
-6. Press **Export Markdown** to download notes.
-
-## Controls
-
-- `Start`: begin capture
-- `Pause`: pause capture + finalize current chunk
-- `Clear`: clear transcript and notes state
-- `Export Markdown`: export current notes as `.md`
-- `Save` (AI Settings): persist provider/toggle/keys
-- `Test Provider`: verify current provider key/model connectivity
-
-## Provider Notes
-
-- Keys are user-provided (BYOK).
-- Keys are stored in `chrome.storage.local`.
-- No keys are hardcoded in repository files.
-- Model resolution includes provider-specific fallback behavior.
-
-## Architecture
-
-- `content-script.js`
-  - DOM-based caption detection/capture
-  - transcript buffer + chunk creation/finalize triggers
-- `service-worker.js`
-  - provider abstraction (Gemini/OpenAI/Anthropic)
-  - 2-stage AI pipeline (clean + merge)
-  - JSON parse/repair validation
-  - quality merge/dedupe hardening
-  - notes persistence + markdown export
-- `sidepanel.html` / `sidepanel.js` / `sidepanel.css`
-  - controls, status UI, AI settings, transcript + notes rendering
+2. Open Settings and configure AI provider/key (optional).
+3. Toggle AI Notes on if AI note generation is desired.
+4. Click Start to capture captions.
+5. Click Pause to stop capture and force-finalize current chunk.
+6. Click Export Markdown to download notes.
 
 ## Troubleshooting
 
 ### Captions not detected
 
-- Ensure captions are enabled in Panopto player.
-- Refresh the video tab after reloading the extension.
-- Confirm `Caption element detected` appears in the side panel.
+- Confirm captions are enabled in the Panopto player.
+- Reload the tab after reloading the extension.
+- Check side panel status values (`Captions` and `Status`).
 
-### Provider test fails
+### AI provider test fails
 
-- Verify key is for selected provider.
-- Check quota/billing/status for that provider.
-- Open extension service worker console (`chrome://extensions` -> extension -> Service worker -> Inspect) for exact API error.
+- Verify provider/key pairing.
+- Verify provider account quota/billing.
+- Inspect service worker logs at `chrome://extensions` -> extension -> Service worker -> Inspect.
 
-### Notes not updating
+### Notes do not update
 
-- Confirm AI Notes is ON.
-- Confirm provider key exists for selected provider.
-- Wait for chunk finalize, or press Pause to force finalize.
-
-## Security and Privacy
-
-- Captured transcript and notes stay in browser storage.
-- External API calls only happen when AI Notes is enabled and a provider key is configured.
-- Review permissions in `manifest.json` before production release.
-
-## Current Status
-
-This is a working MVP with real provider integrations and local quality hardening.  
-Before public launch, you should still complete permission narrowing, privacy policy/docs, and release hardening.
+- Ensure AI Notes is enabled.
+- Ensure selected provider has a configured key.
+- Wait for finalize thresholds or click Pause to force finalize.
