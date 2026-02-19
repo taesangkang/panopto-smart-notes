@@ -109,6 +109,12 @@
         exportToMarkdown().then((markdown) => sendResponse({ markdown }));
         return true;
 
+      case 'SAVE_NOTES_STATE':
+        saveManualNotesState(message.notes)
+          .then((notes) => sendResponse({ success: true, notes }))
+          .catch((error) => sendResponse({ success: false, error: error.message }));
+        return true;
+
       case 'CLEAR_SESSION':
         clearSession().then(() => sendResponse({ success: true }));
         return true;
@@ -507,7 +513,7 @@
   function normalizeSentence(text) {
     return String(text || '')
       .replace(/\s+/g, ' ')
-      .replace(/^\s*[-*•]+\s*/, '')
+      .replace(/^\s*[-*\u2022]+\s*/, '')
       .trim();
   }
 
@@ -610,7 +616,7 @@
 
   function sanitizeHeading(heading) {
     if (typeof heading !== 'string') return '';
-    const clean = heading.replace(/\s+/g, ' ').replace(/[:\-–\s]+$/, '').trim();
+    const clean = heading.replace(/\s+/g, ' ').replace(/[:\-\u2013\s]+$/, '').trim();
     if (!clean || clean.length < 3) return '';
     return clean;
   }
@@ -618,7 +624,7 @@
   function sanitizeBullet(bullet) {
     if (typeof bullet !== 'string') return '';
     let clean = bullet.replace(/\s+/g, ' ').trim();
-    clean = clean.replace(/^\s*[-*•\d.)]+\s*/, '').trim();
+    clean = clean.replace(/^\s*[-*\u2022\d.)]+\s*/, '').trim();
     if (!clean) return '';
     if (BANNED_NOTE_CONTENT_RE.test(clean)) return '';
     if (clean.length < 8) return '';
@@ -822,6 +828,14 @@
     await chrome.storage.session.set({ notesState: normalizeNotesState(notes) });
   }
 
+  async function saveManualNotesState(notes) {
+    const normalized = normalizeNotesState(notes);
+    normalized.lastUpdatedAt = new Date().toISOString();
+    await updateNotesState(normalized);
+    broadcastToSidePanel({ type: 'NOTES_UPDATE', notes: normalized });
+    return normalized;
+  }
+
   async function getAiSettings() {
     const result = await chrome.storage.local.get(['aiSettings']);
     const stored = result.aiSettings || {};
@@ -1001,5 +1015,6 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 })();
+
 
 

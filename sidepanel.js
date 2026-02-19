@@ -12,6 +12,10 @@
   const exportBtn = document.getElementById('export-btn');
   const transcriptContainer = document.getElementById('transcript-container');
   const notesContainer = document.getElementById('notes-container');
+  const editNotesBtn = document.getElementById('edit-notes-btn');
+  const saveNotesBtn = document.getElementById('save-notes-btn');
+  const cancelNotesBtn = document.getElementById('cancel-notes-btn');
+  const notesEditStatusEl = document.getElementById('notes-edit-status');
 
   const aiEnabledToggle = document.getElementById('ai-enabled-toggle');
   const providerSelect = document.getElementById('provider-select');
@@ -26,12 +30,18 @@
   let currentNotes = null;
   let latestAiSettings = null;
 
+  let isEditingNotes = false;
+  let notesDraftText = '';
+  let pendingNotesUpdateWhileEditing = false;
+
   function init() {
     setupEventListeners();
     requestStatus();
     loadNotesState();
     loadAiSettings();
     setupMessageListener();
+    toggleNotesEditButtons();
+    setNotesEditStatus('', '');
   }
 
   function setupEventListeners() {
@@ -48,6 +58,11 @@
     clearBtn.addEventListener('click', async () => {
       currentTranscript = [];
       currentNotes = null;
+      isEditingNotes = false;
+      notesDraftText = '';
+      pendingNotesUpdateWhileEditing = false;
+      toggleNotesEditButtons();
+      setNotesEditStatus('', '');
       renderTranscript();
       renderNotes();
 
@@ -71,6 +86,16 @@
         alert('Failed to export notes');
       }
     });
+
+    if (editNotesBtn) {
+      editNotesBtn.addEventListener('click', enterNotesEditMode);
+    }
+    if (saveNotesBtn) {
+      saveNotesBtn.addEventListener('click', saveNotesEdits);
+    }
+    if (cancelNotesBtn) {
+      cancelNotesBtn.addEventListener('click', cancelNotesEdit);
+    }
 
     providerSelect.addEventListener('change', renderProviderHints);
     saveSettingsBtn.addEventListener('click', saveAiSettings);
@@ -134,8 +159,13 @@
           break;
         case 'NOTES_UPDATE':
           if (message.notes) {
-            currentNotes = message.notes;
-            renderNotes();
+            if (isEditingNotes) {
+              pendingNotesUpdateWhileEditing = true;
+              setNotesEditStatus('New AI notes arrived while editing. Save or Cancel to refresh.', 'warning');
+            } else {
+              currentNotes = message.notes;
+              renderNotes();
+            }
           }
           break;
         case 'ERROR':
@@ -148,6 +178,11 @@
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName === 'session' && changes.notesState) {
+        if (isEditingNotes) {
+          pendingNotesUpdateWhileEditing = true;
+          setNotesEditStatus('Stored notes changed while editing. Save or Cancel to refresh.', 'warning');
+          return;
+        }
         currentNotes = changes.notesState.newValue;
         renderNotes();
       }
@@ -181,6 +216,11 @@
   }
 
   function renderNotes() {
+    if (isEditingNotes) {
+      renderNotesEditor();
+      return;
+    }
+
     const notes = currentNotes || {};
     const sections = Array.isArray(notes.sections) ? notes.sections : [];
     const hasContent = Boolean(notes.title) || sections.length > 0;
@@ -214,12 +254,237 @@
     notesContainer.innerHTML = html;
   }
 
+  function renderNotesEditor() {
+    if (!notesDraftText) {
+      notesDraftText = notesToEditableText(currentNotes || {});
+    }
+    if (!notesDraftText.trim()) {
+      notesDraftText = '## Notes\n- ';
+    }
+
+    const hint = 'Edit format: # Title, ## Section, - Bullet';
+    notesContainer.innerHTML = `
+      <p class="notes-edit-hint">${escapeHtml(hint)}</p>
+      <textarea id="notes-editor" class="notes-editor" spellcheck="false"></textarea>
+    `;
+
+    const editor = document.getElementById('notes-editor');
+    if (editor) {
+      editor.value = notesDraftText;
+      editor.addEventListener('input', () => {
+        notesDraftText = editor.value;
+      });
+      window.setTimeout(() => editor.focus(), 0);
+    }
+  }
+
+  function enterNotesEditMode() {
+    if (isEditingNotes) return;
+    isEditingNotes = true;
+    pendingNotesUpdateWhileEditing = false;
+    notesDraftText = notesToEditableText(currentNotes || {});
+    toggleNotesEditButtons();
+    renderNotes();
+    setNotesEditStatus('Editing Smart Notes. Save to persist your changes.', 'success');
+  }
+
+  function cancelNotesEdit() {
+    if (!isEditingNotes) return;
+
+    isEditingNotes = false;
+    notesDraftText = '';
+    toggleNotesEditButtons();
+    renderNotes();
+
+    if (pendingNotesUpdateWhileEditing) {
+      pendingNotesUpdateWhileEditing = false;
+      loadNotesState();
+      setNotesEditStatus('Edits discarded. Reloaded latest notes.', 'warning');
+      return;
+    }
+
+    setNotesEditStatus('Edits discarded.', 'warning');
+  }
+
+  async function saveNotesEdits() {
+    if (!isEditingNotes) return;
+
+    const editor = document.getElementById('notes-editor');
+    if (editor) {
+      notesDraftText = editor.value;
+    }
+
+    let parsedNotes;
+    try {
+      parsedNotes = parseEditedNotesText(notesDraftText, currentNotes || {});
+    } catch (error) {
+      setNotesEditStatus(`Cannot save: ${error.message}`, 'error');
+      return;
+    }
+
+    saveNotesBtn.disabled = true;
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'SAVE_NOTES_STATE',
+        notes: parsedNotes
+      });
+
+      if (!response || !response.success) {
+        throw new Error((response && response.error) || 'Save failed');
+      }
+
+      currentNotes = response.notes || parsedNotes;
+      isEditingNotes = false;
+      notesDraftText = '';
+      pendingNotesUpdateWhileEditing = false;
+      toggleNotesEditButtons();
+      renderNotes();
+      setNotesEditStatus('Smart Notes saved.', 'success');
+    } catch (error) {
+      setNotesEditStatus(`Failed to save notes: ${error.message}`, 'error');
+    } finally {
+      saveNotesBtn.disabled = false;
+    }
+  }
+
+  function toggleNotesEditButtons() {
+    if (!editNotesBtn || !saveNotesBtn || !cancelNotesBtn) return;
+    editNotesBtn.hidden = isEditingNotes;
+    saveNotesBtn.hidden = !isEditingNotes;
+    cancelNotesBtn.hidden = !isEditingNotes;
+  }
+
+  function setNotesEditStatus(message, variant) {
+    if (!notesEditStatusEl) return;
+    notesEditStatusEl.textContent = message || '';
+    notesEditStatusEl.className = variant
+      ? `notes-edit-status ${variant}`
+      : 'notes-edit-status';
+  }
+
+  function notesToEditableText(notes) {
+    const source = notes && typeof notes === 'object' ? notes : {};
+    const lines = [];
+
+    if (typeof source.title === 'string' && source.title.trim()) {
+      lines.push(`# ${source.title.trim()}`);
+      lines.push('');
+    }
+
+    const sections = Array.isArray(source.sections) ? source.sections : [];
+    sections.forEach((section, index) => {
+      const heading = section && typeof section.heading === 'string'
+        ? section.heading.trim()
+        : '';
+      const bullets = section && Array.isArray(section.bullets)
+        ? section.bullets
+        : [];
+
+      if (!heading) return;
+      lines.push(`## ${heading}`);
+
+      bullets.forEach((bullet) => {
+        if (typeof bullet === 'string' && bullet.trim()) {
+          lines.push(`- ${bullet.trim()}`);
+        }
+      });
+
+      if (index < sections.length - 1) {
+        lines.push('');
+      }
+    });
+
+    return lines.join('\n').trim();
+  }
+
+  function parseEditedNotesText(text, previousNotes) {
+    const input = String(text || '').replace(/\r/g, '');
+    const lines = input.split('\n');
+
+    let title = null;
+    const sections = [];
+    let currentSection = null;
+
+    function ensureSection(headingText) {
+      const heading = String(headingText || '').trim() || 'Notes';
+      currentSection = { heading, bullets: [] };
+      sections.push(currentSection);
+      return currentSection;
+    }
+
+    lines.forEach((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) return;
+
+      if (line.startsWith('## ')) {
+        const heading = line.slice(3).trim();
+        if (heading) {
+          ensureSection(heading);
+        }
+        return;
+      }
+
+      if (line.startsWith('# ') && title === null) {
+        const nextTitle = line.slice(2).trim();
+        title = nextTitle || null;
+        return;
+      }
+
+      const bulletMatch = line.match(/^([-*]|\d+\.)\s+(.+)$/);
+      if (bulletMatch) {
+        const bullet = bulletMatch[2].trim();
+        if (!bullet) return;
+        if (!currentSection) {
+          ensureSection('Notes');
+        }
+        currentSection.bullets.push(bullet);
+        return;
+      }
+
+      if (!currentSection) {
+        ensureSection('Notes');
+      }
+      currentSection.bullets.push(line);
+    });
+
+    const cleanedSections = sections
+      .map((section) => ({
+        heading: String(section.heading || '').trim(),
+        bullets: Array.isArray(section.bullets)
+          ? section.bullets.map((bullet) => String(bullet || '').trim()).filter(Boolean)
+          : []
+      }))
+      .filter((section) => section.heading && section.bullets.length > 0);
+
+    const previousTitle = previousNotes && typeof previousNotes.title === 'string' && previousNotes.title.trim()
+      ? previousNotes.title.trim()
+      : null;
+    const nextTitle = title !== null ? title : previousTitle;
+
+    if (!nextTitle && cleanedSections.length === 0) {
+      throw new Error('Add a title or at least one bullet.');
+    }
+
+    const previousChunkId = previousNotes && typeof previousNotes.lastChunkId === 'string' && previousNotes.lastChunkId.trim()
+      ? previousNotes.lastChunkId.trim()
+      : null;
+
+    return {
+      title: nextTitle,
+      sections: cleanedSections,
+      lastUpdatedAt: new Date().toISOString(),
+      lastChunkId: previousChunkId
+    };
+  }
+
   async function loadNotesState() {
     try {
       const response = await chrome.runtime.sendMessage({ type: 'GET_NOTES_STATE' });
       if (response && response.notes) {
         currentNotes = response.notes;
-        renderNotes();
+        if (!isEditingNotes) {
+          renderNotes();
+        }
       }
     } catch (error) {
       console.error('Failed to load notes:', error);

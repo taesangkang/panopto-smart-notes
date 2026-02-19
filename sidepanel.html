@@ -76,7 +76,15 @@
 
     <!-- Smart Notes -->
     <section class="notes-section">
-      <h2>Smart Notes</h2>
+      <div class="notes-header">
+        <h2>Smart Notes</h2>
+        <div class="notes-actions">
+          <button id="edit-notes-btn" class="btn btn-secondary btn-small">Edit</button>
+          <button id="save-notes-btn" class="btn btn-primary btn-small" hidden>Save</button>
+          <button id="cancel-notes-btn" class="btn btn-danger btn-small" hidden>Cancel</button>
+        </div>
+      </div>
+      <p id="notes-edit-status" class="notes-edit-status"></p>
       <div id="notes-container" class="notes-container">
         <p class="empty-state">Notes will appear here as captions are processed.</p>
       </div>
@@ -86,3 +94,4 @@
   <script src="sidepanel.js"></script>
 </body>
 </html>
+

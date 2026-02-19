@@ -351,3 +351,63 @@ section h2 {
 .transcript-container::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
+
+.notes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.notes-header h2 {
+  margin-bottom: 0;
+}
+
+.notes-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-small {
+  flex: 0 0 auto;
+  min-width: 62px;
+  padding: 6px 10px;
+}
+
+.notes-edit-status {
+  min-height: 18px;
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.notes-edit-status.error {
+  color: #ea4335;
+}
+
+.notes-edit-status.success {
+  color: #34a853;
+}
+
+.notes-edit-status.warning {
+  color: #b26a00;
+}
+
+.notes-editor {
+  width: 100%;
+  min-height: 280px;
+  padding: 10px;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  resize: vertical;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+  background: #fafafa;
+}
+
+.notes-edit-hint {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 8px;
+}
