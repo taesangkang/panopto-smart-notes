@@ -228,6 +228,10 @@
       '- Keep headings stable unless a clearly new topic appears.',
       '- Avoid duplicates; do not re-add an existing point.',
       '- Prefer appending concise technical bullets to existing sections.',
+      '- Use specific concept headings instead of generic labels like "Lecture 6" alone.',
+      '- When useful, encode hierarchy in heading text as "Main Topic :: Subtopic".',
+      '- Keep sections focused: split broad sections into narrower subtopics when they become too large.',
+      '- Keep bullets concise and factual.',
       '- Return ONLY valid JSON matching the schema exactly.'
     ].join('\n');
 
@@ -983,14 +987,46 @@
       markdown += `*Last updated: ${notes.lastUpdatedAt}*\n\n`;
     }
 
+    let openMainHeading = null;
     notes.sections.forEach((section) => {
-      markdown += `## ${section.heading}\n\n`;
+      const parsed = parseCompositeHeading(section.heading);
+      if (parsed.subheading) {
+        if (openMainHeading !== parsed.heading) {
+          markdown += `## ${parsed.heading}\n\n`;
+          openMainHeading = parsed.heading;
+        }
+        markdown += `### ${parsed.subheading}\n\n`;
+      } else {
+        markdown += `## ${parsed.heading}\n\n`;
+        openMainHeading = null;
+      }
       section.bullets.forEach((bullet) => {
         markdown += `- ${bullet}\n`;
       });
       markdown += '\n';
     });
     return markdown;
+  }
+
+  function parseCompositeHeading(rawHeading) {
+    const heading = sanitizeHeading(rawHeading);
+    if (!heading) {
+      return { heading: 'Notes', subheading: '' };
+    }
+
+    const parts = heading
+      .split('::')
+      .map((part) => sanitizeHeading(part))
+      .filter(Boolean);
+
+    if (parts.length >= 2) {
+      return {
+        heading: parts[0],
+        subheading: parts.slice(1).join(' - ')
+      };
+    }
+
+    return { heading, subheading: '' };
   }
 
   async function clearSession() {

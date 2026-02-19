@@ -238,9 +238,13 @@
     sections.forEach((section) => {
       const heading = section && typeof section.heading === 'string' ? section.heading : 'Section';
       const bullets = section && Array.isArray(section.bullets) ? section.bullets : [];
+      const parsedHeading = parseCompositeHeading(heading);
+      const headingLabel = parsedHeading.subheading
+        ? `${parsedHeading.heading} - ${parsedHeading.subheading}`
+        : parsedHeading.heading;
 
       html += '<div class="outline-item">';
-      html += `<div class="outline-heading">${escapeHtml(heading)}</div>`;
+      html += `<div class="outline-heading">${escapeHtml(headingLabel)}</div>`;
       if (bullets.length > 0) {
         html += '<ul class="outline-bullets">';
         bullets.forEach((bullet) => {
@@ -262,7 +266,7 @@
       notesDraftText = '## Notes\n- ';
     }
 
-    const hint = 'Edit format: # Title, ## Section, - Bullet';
+    const hint = 'Edit format: # Title, ## Main Section, ### Subsection, - Bullet';
     notesContainer.innerHTML = `
       <p class="notes-edit-hint">${escapeHtml(hint)}</p>
       <textarea id="notes-editor" class="notes-editor" spellcheck="false"></textarea>
@@ -372,6 +376,7 @@
     }
 
     const sections = Array.isArray(source.sections) ? source.sections : [];
+    let previousMainHeading = '';
     sections.forEach((section, index) => {
       const heading = section && typeof section.heading === 'string'
         ? section.heading.trim()
@@ -381,7 +386,23 @@
         : [];
 
       if (!heading) return;
-      lines.push(`## ${heading}`);
+      const parsedHeading = parseCompositeHeading(heading);
+      if (parsedHeading.subheading) {
+        if (!headingsMatch(previousMainHeading, parsedHeading.heading)) {
+          if (lines.length > 0 && lines[lines.length - 1] !== '') {
+            lines.push('');
+          }
+          lines.push(`## ${parsedHeading.heading}`);
+        }
+        lines.push(`### ${parsedHeading.subheading}`);
+        previousMainHeading = parsedHeading.heading;
+      } else {
+        if (lines.length > 0 && lines[lines.length - 1] !== '') {
+          lines.push('');
+        }
+        lines.push(`## ${parsedHeading.heading}`);
+        previousMainHeading = parsedHeading.heading;
+      }
 
       bullets.forEach((bullet) => {
         if (typeof bullet === 'string' && bullet.trim()) {
@@ -404,6 +425,7 @@
     let title = null;
     const sections = [];
     let currentSection = null;
+    let currentMainHeading = '';
 
     function ensureSection(headingText) {
       const heading = String(headingText || '').trim() || 'Notes';
@@ -416,9 +438,26 @@
       const line = rawLine.trim();
       if (!line) return;
 
+      if (line.startsWith('### ')) {
+        const subheading = line.slice(4).trim();
+        if (subheading) {
+          const mainHeading = currentMainHeading || 'Notes';
+          if (
+            currentSection &&
+            headingsMatch(currentSection.heading, mainHeading) &&
+            currentSection.bullets.length === 0
+          ) {
+            sections.pop();
+          }
+          ensureSection(composeCompositeHeading(mainHeading, subheading));
+        }
+        return;
+      }
+
       if (line.startsWith('## ')) {
         const heading = line.slice(3).trim();
         if (heading) {
+          currentMainHeading = heading;
           ensureSection(heading);
         }
         return;
@@ -475,6 +514,37 @@
       lastUpdatedAt: new Date().toISOString(),
       lastChunkId: previousChunkId
     };
+  }
+
+  function parseCompositeHeading(rawHeading) {
+    const heading = String(rawHeading || '').trim();
+    if (!heading) {
+      return { heading: 'Notes', subheading: '' };
+    }
+
+    const parts = heading
+      .split('::')
+      .map((part) => String(part || '').trim())
+      .filter(Boolean);
+
+    if (parts.length >= 2) {
+      return {
+        heading: parts[0],
+        subheading: parts.slice(1).join(' - ')
+      };
+    }
+
+    return { heading, subheading: '' };
+  }
+
+  function composeCompositeHeading(mainHeading, subheading) {
+    const main = String(mainHeading || '').trim() || 'Notes';
+    const sub = String(subheading || '').trim();
+    return sub ? `${main} :: ${sub}` : main;
+  }
+
+  function headingsMatch(a, b) {
+    return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
   }
 
   async function loadNotesState() {
