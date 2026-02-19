@@ -20,8 +20,8 @@
 
   let lastSentStatus = null;
 
-  const CHUNK_SECONDS = 120;
-  const CHUNK_MAX_CHARS = 1500;
+  const CHUNK_SECONDS = 180;
+  const CHUNK_MAX_CHARS = 5000;
   const UPDATE_WINDOW_MS = 15000;
 
   function init() {
@@ -403,3 +403,5 @@
     init();
   }
 })();
+
+

@@ -24,7 +24,7 @@
   const MIN_LLM_INTERVAL_MS = 5000;
   const MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
   const MAX_SECTIONS = 30;
-  const MAX_BULLETS_PER_SECTION = 24;
+  const MAX_BULLETS_PER_SECTION = 80;
 
   const PREFERRED_MODELS = {
     [PROVIDERS.GEMINI]: [
@@ -599,7 +599,8 @@
     merged.sections = merged.sections
       .map((section) => ({
         heading: sanitizeHeading(section.heading),
-        bullets: dedupeBullets(section.bullets).slice(0, MAX_BULLETS_PER_SECTION)
+        // Keep the most recent bullets so live notes continue updating in long lectures.
+        bullets: dedupeBullets(section.bullets).slice(-MAX_BULLETS_PER_SECTION)
       }))
       .filter((section) => section.heading && section.bullets.length > 0)
       .slice(0, MAX_SECTIONS);
@@ -1000,3 +1001,5 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 })();
+
+
